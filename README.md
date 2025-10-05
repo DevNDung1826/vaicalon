@@ -6,6 +6,7 @@ Một ứng dụng Python desktop tương tác cho phép bạn chọn và di chu
 
 - 📁 **Tải ảnh lên**: Hỗ trợ các định dạng ảnh phổ biến (PNG, JPG, JPEG, GIF, BMP)
 - ✂️ **Chọn vùng**: Vẽ hình chữ nhật để chọn bất kỳ phần nào của ảnh
+- 🎯 **Tự động co vùng**: Khi chọn xong, vùng sẽ TỰ ĐỘNG co lại chỉ bao quanh chi tiết thực sự (loại bỏ phần trong suốt/trống)
 - 🖱️ **Kéo thả**: Di chuyển các vùng đã chọn đến bất kỳ vị trí nào
 - 🔄 **Xoay**: Xoay các phần tử đã chọn theo góc ±15°
 - 🔍 **Phóng to/thu nhỏ**: Điều chỉnh kích thước hiển thị
@@ -60,6 +61,7 @@ chmod +x image_editor.py
 - Click nút **"✂️ Chế độ chọn vùng"** (nút sẽ chuyển màu xanh tím)
 - Nhấn giữ chuột trái và kéo để vẽ hình chữ nhật xung quanh chi tiết muốn di chuyển
 - Thả chuột để hoàn thành việc chọn
+- **✨ MAGIC**: Vùng sẽ TỰ ĐỘNG co lại để chỉ bao quanh phần chi tiết thực sự, loại bỏ các pixel trong suốt/trống xung quanh!
 - Vùng đã chọn sẽ có viền xanh dương
 
 ### 3. Di chuyển chi tiết
@@ -67,22 +69,28 @@ chmod +x image_editor.py
 - Click vào vùng đã chọn và kéo đến vị trí mới
 - Thả chuột để đặt vùng đó xuống
 
-### 4. Xoay chi tiết
+### 4. Co vùng thủ công (nếu cần)
+- Nếu bạn muốn co lại vùng đã chọn sau khi di chuyển hoặc xoay
+- Chọn vùng đó (click vào để có viền xanh)
+- Click nút **"🎯 Co vùng chọn"**
+- Vùng sẽ tự động loại bỏ các pixel trong suốt và co lại vừa khít với chi tiết
+
+### 5. Xoay chi tiết
 - Chọn vùng muốn xoay (click vào nó để có viền xanh)
 - Click nút **"↺ -15°"** để xoay ngược chiều kim đồng hồ
 - Click nút **"↻ +15°"** để xoay cùng chiều kim đồng hồ
 - Có thể click nhiều lần để xoay nhiều góc hơn
 
-### 5. Xóa chi tiết
+### 6. Xóa chi tiết
 - Chọn vùng muốn xóa
 - Click nút **"🗑️ Xóa vùng"** hoặc nhấn phím `Delete`
 
-### 6. Lưu ảnh
+### 7. Lưu ảnh
 - Click nút **"💾 Lưu ảnh"** hoặc nhấn `Ctrl + S`
 - Chọn vị trí và tên file
 - Chọn định dạng (PNG hoặc JPEG)
 
-### 7. Đặt lại
+### 8. Đặt lại
 - Click nút **"🔄 Đặt lại"** để xóa tất cả các vùng đã chọn và quay về ảnh gốc
 
 ## ⌨️ Phím tắt
@@ -96,10 +104,12 @@ chmod +x image_editor.py
 
 ## 🎯 Mẹo sử dụng
 
-1. **Tạo nhiều vùng**: Bạn có thể tạo nhiều vùng khác nhau từ cùng một ảnh và di chuyển chúng độc lập
-2. **Chọn chính xác**: Để chọn vùng chính xác, zoom vào ảnh trước khi chọn
-3. **Sắp xếp lại**: Các vùng được tạo sau sẽ nằm trên các vùng trước đó
-4. **Lưu thường xuyên**: Nên lưu lại tiến độ thường xuyên để tránh mất dữ liệu
+1. **Tự động co vùng thông minh**: Không cần chọn chính xác! Chỉ cần vẽ vùng chọn xung quanh chi tiết (có thể to hơn), vùng sẽ TỰ ĐỘNG co lại vừa khít
+2. **Chọn thoải mái**: Với tính năng auto-trim, bạn có thể chọn vùng rộng hơn, không cần chính xác 100%
+3. **Tạo nhiều vùng**: Bạn có thể tạo nhiều vùng khác nhau từ cùng một ảnh và di chuyển chúng độc lập
+4. **Sắp xếp lại**: Các vùng được tạo sau sẽ nằm trên các vùng trước đó
+5. **Co lại bất cứ lúc nào**: Nếu sau khi xoay vùng bị to ra, dùng nút "🎯 Co vùng chọn" để co lại
+6. **Lưu thường xuyên**: Nên lưu lại tiến độ thường xuyên để tránh mất dữ liệu
 
 ## 🛠️ Công nghệ sử dụng
 

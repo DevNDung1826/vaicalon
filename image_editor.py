@@ -39,6 +39,29 @@ class Layer:
     def get_bounds(self) -> Tuple[int, int, int, int]:
         """Lấy tọa độ bounds của layer"""
         return (self.x, self.y, self.x + self.width, self.y + self.height)
+    
+    def auto_trim(self):
+        """Tự động cắt bỏ phần trong suốt/trống xung quanh"""
+        # Get image data
+        bbox = self.image.getbbox()
+        
+        if bbox:
+            # Crop to content
+            trimmed = self.image.crop(bbox)
+            
+            # Update position to account for trimmed area
+            self.x += bbox[0]
+            self.y += bbox[1]
+            
+            # Update image and dimensions
+            self.image = trimmed
+            self.original_image = trimmed.copy()
+            self.width = trimmed.width
+            self.height = trimmed.height
+            self.rotation = 0  # Reset rotation after trim
+            
+            return True
+        return False
 
 
 class ImageEditor:
@@ -202,6 +225,20 @@ class ImageEditor:
             **btn_style
         ).pack(side=tk.LEFT, padx=2)
         
+        # Auto-trim control
+        tk.Label(toolbar_frame, text="Tự động:", bg='#f8f9fa', font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(20, 5))
+        
+        self.auto_trim_btn = tk.Button(
+            toolbar_frame,
+            text="🎯 Co vùng chọn",
+            command=self.auto_trim_selected,
+            bg='#4dabf7',
+            fg='white',
+            state=tk.DISABLED,
+            **btn_style
+        )
+        self.auto_trim_btn.pack(side=tk.LEFT, padx=2)
+        
         # Canvas frame
         canvas_frame = tk.Frame(self.root, bg='#e0e0e0')
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -270,8 +307,9 @@ class ImageEditor:
         
         instructions = [
             "▸ Tải ảnh: Nhấp 'Tải ảnh lên' hoặc Ctrl+O",
-            "▸ Chọn vùng: Kích hoạt chế độ chọn, sau đó kéo chuột trên ảnh",
+            "▸ Chọn vùng: Kích hoạt chế độ chọn, sau đó kéo chuột trên ảnh (vùng sẽ TỰ ĐỘNG co lại)",
             "▸ Di chuyển: Click và kéo vùng đã chọn đến vị trí mới",
+            "▸ Co vùng thủ công: Chọn vùng, sau đó nhấn '🎯 Co vùng chọn' để loại bỏ phần trong suốt",
             "▸ Xoay: Chọn vùng, sau đó dùng nút xoay (↺/↻)",
             "▸ Xóa: Chọn vùng và nhấn Delete hoặc nút 'Xóa vùng'",
             "▸ Lưu: Nhấn 'Lưu ảnh' hoặc Ctrl+S"
@@ -373,6 +411,8 @@ class ImageEditor:
         else:
             # Check if clicking on a layer
             self.selected_layer = None
+            found = False
+            
             for layer in reversed(self.layers):
                 if layer.contains(x, y):
                     # Deselect all
@@ -383,7 +423,15 @@ class ImageEditor:
                     self.selected_layer = layer
                     self.is_dragging = True
                     self.drag_start = (int(x) - layer.x, int(y) - layer.y)
+                    self.auto_trim_btn.configure(state=tk.NORMAL)
+                    found = True
                     break
+            
+            if not found:
+                # Deselect all if clicked on empty area
+                for l in self.layers:
+                    l.selected = False
+                self.auto_trim_btn.configure(state=tk.DISABLED)
             
             self.display_image_on_canvas()
             self.update_info()
@@ -460,6 +508,10 @@ class ImageEditor:
         layer = Layer(region, x, y)
         layer.selected = True
         
+        # Auto-trim the layer to remove transparent pixels
+        if layer.auto_trim():
+            print(f"Đã tự động co vùng: {layer.width}x{layer.height} px")
+        
         # Deselect all other layers
         for l in self.layers:
             l.selected = False
@@ -473,6 +525,7 @@ class ImageEditor:
         self.display_image_on_canvas()
         self.update_info()
         self.delete_btn.configure(state=tk.NORMAL)
+        self.auto_trim_btn.configure(state=tk.NORMAL)
     
     def delete_selected(self):
         """Xóa layer đang được chọn"""
@@ -484,6 +537,27 @@ class ImageEditor:
             
             if not self.layers:
                 self.delete_btn.configure(state=tk.DISABLED)
+                self.auto_trim_btn.configure(state=tk.DISABLED)
+    
+    def auto_trim_selected(self):
+        """Tự động co vùng đã chọn để chỉ bao quanh phần có nội dung"""
+        if self.selected_layer:
+            old_size = (self.selected_layer.width, self.selected_layer.height)
+            
+            if self.selected_layer.auto_trim():
+                new_size = (self.selected_layer.width, self.selected_layer.height)
+                self.display_image_on_canvas()
+                self.update_info()
+                
+                messagebox.showinfo(
+                    "Thành công",
+                    f"Đã co vùng từ {old_size[0]}x{old_size[1]} → {new_size[0]}x{new_size[1]} px"
+                )
+            else:
+                messagebox.showinfo(
+                    "Thông báo",
+                    "Vùng này không có phần trong suốt để co lại!"
+                )
     
     def rotate_selection(self, angle: float):
         """Xoay layer đang được chọn"""
@@ -508,6 +582,7 @@ class ImageEditor:
         self.zoom_level = 1.0
         self.zoom_label.configure(text='100%')
         self.delete_btn.configure(state=tk.DISABLED)
+        self.auto_trim_btn.configure(state=tk.DISABLED)
         
         if self.original_image:
             self.display_image_on_canvas()
@@ -549,6 +624,7 @@ class ImageEditor:
         if self.selected_layer:
             self.selected_layer.selected = False
             self.selected_layer = None
+            self.auto_trim_btn.configure(state=tk.DISABLED)
             self.display_image_on_canvas()
         
         if self.select_mode:
