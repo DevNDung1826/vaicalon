@@ -7,7 +7,7 @@ import cv2
 class ImageSegmentTool:
     def __init__(self, root):
         self.root = root
-        self.root.title("Image Segment Tool - Công cụ chia và di chuyển chi tiết ảnh")
+        self.root.title("Image Segment Tool - Công cụ phát hiện và di chuyển chi tiết ảnh")
         self.root.geometry("1400x900")
         
         # Image data
@@ -21,24 +21,27 @@ class ImageSegmentTool:
         self.flip_horizontal = False
         self.flip_vertical = False
         
-        # Segmentation data
-        self.vertical_lines = []
-        self.horizontal_lines = []
-        self.segments = []
-        self.segment_positions = []
+        # Segmentation data - now segments are independent objects
+        self.segments = []  # List of segment images
+        self.segment_positions = []  # Absolute positions [x, y, width, height]
+        self.segment_contours = []  # Store contour info
         
-        # Canvas scale
+        # Canvas properties - expandable workspace
         self.canvas_scale = 1.0
         self.canvas_offset_x = 0
         self.canvas_offset_y = 0
+        self.workspace_width = 3000  # Large workspace
+        self.workspace_height = 3000
         
         # Interaction state
         self.selected_segment = None
         self.dragging_segment = False
         self.drag_start_x = 0
         self.drag_start_y = 0
-        self.dragging_line = None
-        self.line_type = None
+        
+        # Detection parameters
+        self.threshold_value = tk.IntVar(value=127)
+        self.min_area = tk.IntVar(value=100)
         
         self.setup_ui()
         
@@ -71,33 +74,47 @@ class ImageSegmentTool:
         
         ttk.Separator(control_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         
-        # Segmentation controls
-        ttk.Label(control_frame, text="Chia ảnh:").pack(side=tk.LEFT, padx=5)
-        ttk.Button(control_frame, text="➕ Dọc", command=self.add_vertical_line).pack(side=tk.LEFT, padx=2)
-        ttk.Button(control_frame, text="➕ Ngang", command=self.add_horizontal_line).pack(side=tk.LEFT, padx=2)
-        ttk.Button(control_frame, text="🔄 Cập nhật", command=self.update_segments).pack(side=tk.LEFT, padx=2)
-        ttk.Button(control_frame, text="🗑 Xóa đường", command=self.clear_lines).pack(side=tk.LEFT, padx=2)
+        # Auto detection controls
+        ttk.Label(control_frame, text="Phát hiện:").pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="🔍 Tự động", command=self.auto_detect_segments).pack(side=tk.LEFT, padx=2)
+        ttk.Button(control_frame, text="⚙️ Cài đặt", command=self.show_detection_settings).pack(side=tk.LEFT, padx=2)
         
         ttk.Separator(control_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         
         # Reset and Save
         ttk.Button(control_frame, text="↺ Reset", command=self.reset_transformations).pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="🗑 Xóa chi tiết", command=self.clear_segments).pack(side=tk.LEFT, padx=2)
         ttk.Button(control_frame, text="💾 Lưu", command=self.save_image).pack(side=tk.LEFT, padx=5)
         
-        # Main canvas
-        canvas_frame = ttk.Frame(self.root)
-        canvas_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Main canvas with scrollbars
+        canvas_container = ttk.Frame(self.root)
+        canvas_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        self.canvas = tk.Canvas(canvas_frame, bg='#2b2b2b', highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
+        # Scrollbars
+        h_scrollbar = ttk.Scrollbar(canvas_container, orient=tk.HORIZONTAL)
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        v_scrollbar = ttk.Scrollbar(canvas_container, orient=tk.VERTICAL)
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Canvas with large scrollable area
+        self.canvas = tk.Canvas(canvas_container, bg='#2b2b2b', highlightthickness=0,
+                               scrollregion=(0, 0, self.workspace_width, self.workspace_height),
+                               xscrollcommand=h_scrollbar.set,
+                               yscrollcommand=v_scrollbar.set)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        h_scrollbar.config(command=self.canvas.xview)
+        v_scrollbar.config(command=self.canvas.yview)
         
         # Bind mouse events
         self.canvas.bind('<Button-1>', self.on_canvas_click)
         self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_canvas_release)
+        self.canvas.bind('<Button-3>', self.on_right_click)  # Right click for delete
         
         # Status bar
-        self.status_var = tk.StringVar(value="Sẵn sàng. Vui lòng tải ảnh.")
+        self.status_var = tk.StringVar(value="Sẵn sàng. Vui lòng tải ảnh và nhấn 'Tự động' để phát hiện chi tiết.")
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         
@@ -119,14 +136,18 @@ class ImageSegmentTool:
                 self.flip_vertical = False
                 self.rotation_var.set("0")
                 
-                # Initialize segmentation with 2x2 grid
-                self.vertical_lines = [self.current_image.width // 3, 2 * self.current_image.width // 3]
-                self.horizontal_lines = [self.current_image.height // 3, 2 * self.current_image.height // 3]
+                # Clear segments
+                self.segments = []
+                self.segment_positions = []
+                self.segment_contours = []
                 
-                self.update_segments()
+                # Center image in workspace
+                self.canvas_offset_x = (self.workspace_width - self.current_image.width) // 2
+                self.canvas_offset_y = (self.workspace_height - self.current_image.height) // 2
+                
                 self.display_canvas()
                 
-                self.status_var.set(f"Đã tải: {file_path}")
+                self.status_var.set(f"Đã tải: {file_path} - Nhấn 'Tự động' để phát hiện chi tiết")
             except Exception as e:
                 messagebox.showerror("Lỗi", f"Không thể tải ảnh: {str(e)}")
     
@@ -166,65 +187,124 @@ class ImageSegmentTool:
                 img = img.rotate(-self.rotation_angle, resample=Image.BICUBIC, expand=True)
             
             self.current_image = img
-            self.update_segments()
-            self.display_canvas()
-    
-    def add_vertical_line(self):
-        if self.current_image:
-            # Add line at center if no lines, otherwise add between existing
-            if not self.vertical_lines:
-                pos = self.current_image.width // 2
-            else:
-                pos = sum(self.vertical_lines) // len(self.vertical_lines)
             
-            self.vertical_lines.append(pos)
-            self.vertical_lines.sort()
-            self.display_canvas()
-            self.status_var.set("Đã thêm đường dọc. Kéo để di chuyển, nhấn 'Cập nhật' để chia ảnh.")
-    
-    def add_horizontal_line(self):
-        if self.current_image:
-            if not self.horizontal_lines:
-                pos = self.current_image.height // 2
-            else:
-                pos = sum(self.horizontal_lines) // len(self.horizontal_lines)
+            # Clear segments after transformation
+            self.segments = []
+            self.segment_positions = []
+            self.segment_contours = []
             
-            self.horizontal_lines.append(pos)
-            self.horizontal_lines.sort()
             self.display_canvas()
-            self.status_var.set("Đã thêm đường ngang. Kéo để di chuyển, nhấn 'Cập nhật' để chia ảnh.")
     
-    def clear_lines(self):
-        self.vertical_lines = []
-        self.horizontal_lines = []
-        self.segments = []
-        self.segment_positions = []
-        self.display_canvas()
-        self.status_var.set("Đã xóa tất cả đường chia")
+    def show_detection_settings(self):
+        """Show dialog for detection parameters"""
+        settings_window = tk.Toplevel(self.root)
+        settings_window.title("Cài đặt phát hiện")
+        settings_window.geometry("400x250")
+        settings_window.transient(self.root)
+        
+        frame = ttk.Frame(settings_window, padding="20")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Threshold
+        ttk.Label(frame, text="Ngưỡng phát hiện (0-255):").pack(anchor=tk.W, pady=5)
+        threshold_scale = ttk.Scale(frame, from_=0, to=255, variable=self.threshold_value, 
+                                   orient=tk.HORIZONTAL, length=300)
+        threshold_scale.pack(pady=5)
+        ttk.Label(frame, textvariable=self.threshold_value).pack()
+        
+        ttk.Separator(frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        
+        # Min area
+        ttk.Label(frame, text="Kích thước tối thiểu (pixels):").pack(anchor=tk.W, pady=5)
+        area_scale = ttk.Scale(frame, from_=50, to=5000, variable=self.min_area, 
+                              orient=tk.HORIZONTAL, length=300)
+        area_scale.pack(pady=5)
+        ttk.Label(frame, textvariable=self.min_area).pack()
+        
+        ttk.Separator(frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+        
+        # Buttons
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="Áp dụng", command=lambda: [self.auto_detect_segments(), settings_window.destroy()]).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Đóng", command=settings_window.destroy).pack(side=tk.LEFT, padx=5)
     
-    def update_segments(self):
+    def auto_detect_segments(self):
+        """Automatically detect segments using computer vision"""
         if not self.current_image:
+            messagebox.showwarning("Cảnh báo", "Vui lòng tải ảnh trước")
             return
         
-        # Create segments based on lines
-        x_positions = [0] + sorted(self.vertical_lines) + [self.current_image.width]
-        y_positions = [0] + sorted(self.horizontal_lines) + [self.current_image.height]
-        
+        try:
+            # Convert PIL to OpenCV format
+            img_array = np.array(self.current_image)
+            
+            # Convert to grayscale
+            if len(img_array.shape) == 3:
+                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = img_array
+            
+            # Apply threshold
+            _, thresh = cv2.threshold(gray, self.threshold_value.get(), 255, cv2.THRESH_BINARY)
+            
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Clear existing segments
+            self.segments = []
+            self.segment_positions = []
+            self.segment_contours = []
+            
+            # Process each contour
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                
+                if area < self.min_area.get():
+                    continue
+                
+                # Get bounding rectangle
+                x, y, w, h = cv2.boundingRect(contour)
+                
+                # Skip if too small
+                if w < 10 or h < 10:
+                    continue
+                
+                # Extract segment with some padding
+                padding = 2
+                x1 = max(0, x - padding)
+                y1 = max(0, y - padding)
+                x2 = min(self.current_image.width, x + w + padding)
+                y2 = min(self.current_image.height, y + h + padding)
+                
+                # Crop segment
+                segment = self.current_image.crop((x1, y1, x2, y2))
+                
+                # Store segment at original position in workspace
+                abs_x = self.canvas_offset_x + x1
+                abs_y = self.canvas_offset_y + y1
+                
+                self.segments.append(segment)
+                self.segment_positions.append([abs_x, abs_y, segment.width, segment.height])
+                self.segment_contours.append(contour)
+            
+            if len(self.segments) == 0:
+                messagebox.showinfo("Thông báo", "Không phát hiện được chi tiết. Thử điều chỉnh cài đặt.")
+            else:
+                self.status_var.set(f"Đã phát hiện {len(self.segments)} chi tiết - Kéo thả để di chuyển")
+            
+            self.display_canvas()
+            
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Lỗi phát hiện chi tiết: {str(e)}")
+    
+    def clear_segments(self):
+        """Clear all detected segments"""
         self.segments = []
         self.segment_positions = []
-        
-        for i in range(len(y_positions) - 1):
-            for j in range(len(x_positions) - 1):
-                x1, x2 = x_positions[j], x_positions[j + 1]
-                y1, y2 = y_positions[i], y_positions[i + 1]
-                
-                # Extract segment (no deformation)
-                segment = self.current_image.crop((x1, y1, x2, y2))
-                self.segments.append(segment)
-                self.segment_positions.append([x1, y1, x2, y2])
-        
+        self.segment_contours = []
         self.display_canvas()
-        self.status_var.set(f"Đã tạo {len(self.segments)} chi tiết")
+        self.status_var.set("Đã xóa tất cả chi tiết")
     
     def reset_transformations(self):
         if self.original_image:
@@ -233,178 +313,167 @@ class ImageSegmentTool:
             self.flip_vertical = False
             self.rotation_var.set("0")
             self.current_image = self.original_image.copy()
-            self.vertical_lines = []
-            self.horizontal_lines = []
             self.segments = []
             self.segment_positions = []
+            self.segment_contours = []
             self.display_canvas()
             self.status_var.set("Đã reset về trạng thái ban đầu")
     
     def display_canvas(self):
-        if not self.current_image:
-            return
-        
+        """Display current image and segments on canvas"""
         # Clear canvas
         self.canvas.delete("all")
         
-        # Calculate scaling
-        canvas_width = self.canvas.winfo_width()
-        canvas_height = self.canvas.winfo_height()
+        # Draw grid for reference
+        self.draw_grid()
         
-        if canvas_width <= 1 or canvas_height <= 1:
-            canvas_width = 1200
-            canvas_height = 700
-        
-        if self.segments:
-            # Calculate bounding box of all segments
-            max_x = max(pos[2] for pos in self.segment_positions)
-            max_y = max(pos[3] for pos in self.segment_positions)
-            img_width, img_height = max_x, max_y
-        else:
+        # Draw original image if no segments
+        if self.current_image and not self.segments:
             img_width = self.current_image.width
             img_height = self.current_image.height
-        
-        scale_x = (canvas_width - 40) / img_width
-        scale_y = (canvas_height - 40) / img_height
-        self.canvas_scale = min(scale_x, scale_y, 1.0)  # Don't upscale
-        
-        self.canvas_offset_x = (canvas_width - img_width * self.canvas_scale) / 2
-        self.canvas_offset_y = (canvas_height - img_height * self.canvas_scale) / 2
-        
-        # Draw segments or full image
-        if self.segments:
-            for idx, (segment, pos) in enumerate(zip(self.segments, self.segment_positions)):
-                x1, y1, x2, y2 = pos
-                
-                # Scale segment for display
-                display_width = int((x2 - x1) * self.canvas_scale)
-                display_height = int((y2 - y1) * self.canvas_scale)
-                
-                if display_width > 0 and display_height > 0:
-                    segment_resized = segment.resize((display_width, display_height), Image.LANCZOS)
-                    photo = ImageTk.PhotoImage(segment_resized)
-                    
-                    canvas_x = self.canvas_offset_x + x1 * self.canvas_scale
-                    canvas_y = self.canvas_offset_y + y1 * self.canvas_scale
-                    
-                    self.canvas.create_image(canvas_x, canvas_y, anchor=tk.NW, image=photo, tags=f"segment_{idx}")
-                    self.canvas.image_refs = getattr(self.canvas, 'image_refs', [])
-                    self.canvas.image_refs.append(photo)
-                    
-                    # Draw border around segment
-                    border_x1 = canvas_x
-                    border_y1 = canvas_y
-                    border_x2 = canvas_x + display_width
-                    border_y2 = canvas_y + display_height
-                    self.canvas.create_rectangle(border_x1, border_y1, border_x2, border_y2, 
-                                                outline='#00ff00', width=2, tags=f"border_{idx}")
-        else:
-            # Display full image with cutting lines
-            display_width = int(self.current_image.width * self.canvas_scale)
-            display_height = int(self.current_image.height * self.canvas_scale)
             
-            if display_width > 0 and display_height > 0:
-                img_resized = self.current_image.resize((display_width, display_height), Image.LANCZOS)
-                photo = ImageTk.PhotoImage(img_resized)
-                
-                self.canvas.create_image(self.canvas_offset_x, self.canvas_offset_y, 
-                                        anchor=tk.NW, image=photo, tags="main_image")
-                self.canvas.image_photo = photo
-                
-                # Draw cutting lines
-                for x in self.vertical_lines:
-                    canvas_x = self.canvas_offset_x + x * self.canvas_scale
-                    self.canvas.create_line(canvas_x, self.canvas_offset_y,
-                                          canvas_x, self.canvas_offset_y + display_height,
-                                          fill='red', width=2, tags=f"vline_{x}")
-                
-                for y in self.horizontal_lines:
-                    canvas_y = self.canvas_offset_y + y * self.canvas_scale
-                    self.canvas.create_line(self.canvas_offset_x, canvas_y,
-                                          self.canvas_offset_x + display_width, canvas_y,
-                                          fill='red', width=2, tags=f"hline_{y}")
+            # Create PhotoImage
+            photo = ImageTk.PhotoImage(self.current_image)
+            
+            self.canvas.create_image(self.canvas_offset_x, self.canvas_offset_y, 
+                                    anchor=tk.NW, image=photo, tags="original_image")
+            self.canvas.image_photo = photo
+            
+            # Draw border
+            self.canvas.create_rectangle(self.canvas_offset_x, self.canvas_offset_y,
+                                        self.canvas_offset_x + img_width, 
+                                        self.canvas_offset_y + img_height,
+                                        outline='#555555', width=2, dash=(5, 5))
+        
+        # Draw all segments at their positions
+        self.canvas.image_refs = []
+        for idx, (segment, pos) in enumerate(zip(self.segments, self.segment_positions)):
+            x, y, w, h = pos
+            
+            # Create PhotoImage
+            photo = ImageTk.PhotoImage(segment)
+            
+            # Draw segment
+            self.canvas.create_image(x, y, anchor=tk.NW, image=photo, tags=f"segment_{idx}")
+            self.canvas.image_refs.append(photo)
+            
+            # Draw border
+            border_color = '#00ff00' if idx == self.selected_segment else '#ffff00'
+            border_width = 3 if idx == self.selected_segment else 2
+            self.canvas.create_rectangle(x, y, x + w, y + h, 
+                                        outline=border_color, width=border_width, 
+                                        tags=f"border_{idx}")
+            
+            # Draw label
+            self.canvas.create_text(x + 5, y + 5, text=f"#{idx+1}", 
+                                  fill='white', font=('Arial', 10, 'bold'),
+                                  anchor=tk.NW, tags=f"label_{idx}")
+    
+    def draw_grid(self):
+        """Draw reference grid on canvas"""
+        grid_spacing = 100
+        grid_color = '#404040'
+        
+        # Vertical lines
+        for x in range(0, self.workspace_width, grid_spacing):
+            self.canvas.create_line(x, 0, x, self.workspace_height, 
+                                  fill=grid_color, width=1, tags="grid")
+        
+        # Horizontal lines
+        for y in range(0, self.workspace_height, grid_spacing):
+            self.canvas.create_line(0, y, self.workspace_width, y, 
+                                  fill=grid_color, width=1, tags="grid")
     
     def on_canvas_click(self, event):
-        if not self.current_image:
+        """Handle canvas click - select segment"""
+        if not self.segments:
             return
         
-        # Check if clicking on a cutting line
-        if not self.segments:
-            for idx, x in enumerate(self.vertical_lines):
-                canvas_x = self.canvas_offset_x + x * self.canvas_scale
-                if abs(event.x - canvas_x) < 10:
-                    self.dragging_line = idx
-                    self.line_type = 'vertical'
-                    return
-            
-            for idx, y in enumerate(self.horizontal_lines):
-                canvas_y = self.canvas_offset_y + y * self.canvas_scale
-                if abs(event.y - canvas_y) < 10:
-                    self.dragging_line = idx
-                    self.line_type = 'horizontal'
-                    return
+        # Get canvas coordinates (accounting for scroll)
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
         
-        # Check if clicking on a segment
-        if self.segments:
-            for idx, pos in enumerate(self.segment_positions):
-                x1, y1, x2, y2 = pos
-                canvas_x1 = self.canvas_offset_x + x1 * self.canvas_scale
-                canvas_y1 = self.canvas_offset_y + y1 * self.canvas_scale
-                canvas_x2 = self.canvas_offset_x + x2 * self.canvas_scale
-                canvas_y2 = self.canvas_offset_y + y2 * self.canvas_scale
-                
-                if canvas_x1 <= event.x <= canvas_x2 and canvas_y1 <= event.y <= canvas_y2:
-                    self.selected_segment = idx
-                    self.dragging_segment = True
-                    self.drag_start_x = event.x
-                    self.drag_start_y = event.y
-                    self.status_var.set(f"Đang kéo chi tiết {idx + 1}")
-                    break
+        # Check if clicking on a segment (reverse order for top segments first)
+        for idx in range(len(self.segment_positions) - 1, -1, -1):
+            x, y, w, h = self.segment_positions[idx]
+            
+            if x <= canvas_x <= x + w and y <= canvas_y <= y + h:
+                self.selected_segment = idx
+                self.dragging_segment = True
+                self.drag_start_x = canvas_x
+                self.drag_start_y = canvas_y
+                self.status_var.set(f"Đang kéo chi tiết #{idx + 1}")
+                self.display_canvas()
+                return
+        
+        # Clicked on empty space
+        self.selected_segment = None
+        self.display_canvas()
     
     def on_canvas_drag(self, event):
-        if self.dragging_line is not None:
-            if self.line_type == 'vertical':
-                new_x = (event.x - self.canvas_offset_x) / self.canvas_scale
-                new_x = max(1, min(new_x, self.current_image.width - 1))
-                self.vertical_lines[self.dragging_line] = int(new_x)
-            elif self.line_type == 'horizontal':
-                new_y = (event.y - self.canvas_offset_y) / self.canvas_scale
-                new_y = max(1, min(new_y, self.current_image.height - 1))
-                self.horizontal_lines[self.dragging_line] = int(new_y)
-            
-            self.display_canvas()
+        """Handle dragging segment"""
+        if not self.dragging_segment or self.selected_segment is None:
+            return
         
-        elif self.dragging_segment and self.selected_segment is not None:
-            dx = event.x - self.drag_start_x
-            dy = event.y - self.drag_start_y
-            
-            # Update segment position
-            pos = self.segment_positions[self.selected_segment]
-            dx_img = dx / self.canvas_scale
-            dy_img = dy / self.canvas_scale
-            
-            pos[0] += dx_img
-            pos[1] += dy_img
-            pos[2] += dx_img
-            pos[3] += dy_img
-            
-            self.drag_start_x = event.x
-            self.drag_start_y = event.y
-            
-            self.display_canvas()
+        # Get canvas coordinates
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        
+        # Calculate movement
+        dx = canvas_x - self.drag_start_x
+        dy = canvas_y - self.drag_start_y
+        
+        # Update segment position (can go anywhere in workspace)
+        pos = self.segment_positions[self.selected_segment]
+        pos[0] += dx
+        pos[1] += dy
+        
+        # Keep within workspace bounds (optional, remove if want unlimited)
+        pos[0] = max(0, min(pos[0], self.workspace_width - pos[2]))
+        pos[1] = max(0, min(pos[1], self.workspace_height - pos[3]))
+        
+        self.drag_start_x = canvas_x
+        self.drag_start_y = canvas_y
+        
+        self.display_canvas()
     
     def on_canvas_release(self, event):
-        if self.dragging_line is not None:
-            self.dragging_line = None
-            self.line_type = None
-            self.status_var.set("Di chuyển đường thành công. Nhấn 'Cập nhật' để chia lại ảnh.")
-        
+        """Handle mouse release"""
         if self.dragging_segment:
             self.dragging_segment = False
-            self.status_var.set(f"Đã di chuyển chi tiết {self.selected_segment + 1}")
+            if self.selected_segment is not None:
+                pos = self.segment_positions[self.selected_segment]
+                self.status_var.set(f"Chi tiết #{self.selected_segment + 1} tại vị trí ({int(pos[0])}, {int(pos[1])})")
+    
+    def on_right_click(self, event):
+        """Handle right click - delete segment"""
+        if not self.segments:
+            return
+        
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        
+        for idx in range(len(self.segment_positions) - 1, -1, -1):
+            x, y, w, h = self.segment_positions[idx]
+            
+            if x <= canvas_x <= x + w and y <= canvas_y <= y + h:
+                # Delete this segment
+                del self.segments[idx]
+                del self.segment_positions[idx]
+                del self.segment_contours[idx]
+                
+                if self.selected_segment == idx:
+                    self.selected_segment = None
+                elif self.selected_segment and self.selected_segment > idx:
+                    self.selected_segment -= 1
+                
+                self.status_var.set(f"Đã xóa chi tiết #{idx + 1}")
+                self.display_canvas()
+                return
     
     def save_image(self):
-        if not self.current_image:
+        """Save the composition with segments at their positions"""
+        if not self.current_image and not self.segments:
             messagebox.showwarning("Cảnh báo", "Chưa có ảnh để lưu")
             return
         
@@ -417,25 +486,45 @@ class ImageSegmentTool:
         if file_path:
             try:
                 if self.segments:
-                    # Create composite image from segments
-                    max_x = int(max(pos[2] for pos in self.segment_positions))
-                    max_y = int(max(pos[3] for pos in self.segment_positions))
+                    # Calculate bounding box of all segments
+                    min_x = min(pos[0] for pos in self.segment_positions)
+                    min_y = min(pos[1] for pos in self.segment_positions)
+                    max_x = max(pos[0] + pos[2] for pos in self.segment_positions)
+                    max_y = max(pos[1] + pos[3] for pos in self.segment_positions)
+                    
+                    # Add padding
+                    padding = 50
+                    min_x = max(0, int(min_x) - padding)
+                    min_y = max(0, int(min_y) - padding)
+                    max_x = int(max_x) + padding
+                    max_y = int(max_y) + padding
+                    
+                    width = max_x - min_x
+                    height = max_y - min_y
                     
                     # Create transparent canvas
-                    composite = Image.new('RGBA', (max_x + 100, max_y + 100), (0, 0, 0, 0))
+                    composite = Image.new('RGBA', (width, height), (0, 0, 0, 0))
                     
+                    # Paste all segments
                     for segment, pos in zip(self.segments, self.segment_positions):
-                        x1, y1 = int(pos[0]), int(pos[1])
-                        composite.paste(segment, (x1, y1))
+                        x, y = int(pos[0]) - min_x, int(pos[1]) - min_y
+                        
+                        # Convert segment to RGBA if needed
+                        if segment.mode != 'RGBA':
+                            segment = segment.convert('RGBA')
+                        
+                        composite.paste(segment, (x, y), segment)
                     
-                    # Convert to RGB for saving as JPEG
-                    if file_path.lower().endswith('.jpg') or file_path.lower().endswith('.jpeg'):
+                    # Save
+                    if file_path.lower().endswith(('.jpg', '.jpeg')):
+                        # Convert to RGB for JPEG
                         rgb_composite = Image.new('RGB', composite.size, (255, 255, 255))
-                        rgb_composite.paste(composite, mask=composite.split()[3] if composite.mode == 'RGBA' else None)
+                        rgb_composite.paste(composite, mask=composite.split()[3])
                         rgb_composite.save(file_path, quality=95)
                     else:
                         composite.save(file_path)
                 else:
+                    # Save current image
                     self.current_image.save(file_path, quality=95)
                 
                 self.status_var.set(f"Đã lưu: {file_path}")
