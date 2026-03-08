@@ -1,1 +1,1 @@
-Vũ trụ 6:dragon6.teamobi.com:14445:0:0:0
+Gomobi 1:127.0.0.1:14445:0,0,0
